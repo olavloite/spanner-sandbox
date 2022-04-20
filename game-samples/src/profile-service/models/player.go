@@ -7,7 +7,7 @@ import (
 	"net/mail"
 	"time"
 
-	"cloud.google.com/go/spanner"
+	spanner "cloud.google.com/go/spanner"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -59,7 +59,7 @@ func generateUUID() string {
 	return uuid.NewString()
 }
 
-func AddPlayer(p Player) (string, error) {
+func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, error) {
 	// Ensure email is valid
 	if err := validateEmail(p.Email); err != true {
 		return "", fmt.Errorf("New player has invalid email '%s'", p.Email)
@@ -76,17 +76,6 @@ func AddPlayer(p Player) (string, error) {
 
 	// Generate UUIDv4
 	p.PlayerUUID = generateUUID()
-
-	var db = "projects/development-344820/instances/cymbal-games/databases/my_game"
-
-	ctx := context.Background()
-	client, err := spanner.NewClient(ctx, db)
-
-	if err != nil {
-		return "", err
-	}
-
-	defer client.Close()
 
 	// insert into spanner
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
