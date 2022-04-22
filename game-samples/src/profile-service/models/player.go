@@ -10,6 +10,7 @@ import (
 	spanner "cloud.google.com/go/spanner"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	iterator "google.golang.org/api/iterator"
 )
 
 type Timestamp time.Time
@@ -104,10 +105,50 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 	return p.PlayerUUID, nil
 }
 
+// TODO: Currently limits to 10k by default. This shouldn't be exposed to public API usage
+func GetPlayers(ctx context.Context, client spanner.Client) ([]string, error) {
+
+	ro := client.ReadOnlyTransaction()
+
+	stmt := spanner.Statement{SQL: `SELECT playerUUID FROM players LIMIT 10000`}
+	iter := ro.Query(ctx, stmt)
+	defer iter.Stop()
+
+	var playerUUIDs []string
+
+	for {
+		row, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+
+		if err != nil {
+			return playerUUIDs, err
+		}
+
+		var pUUID string
+		if err := row.Columns(&pUUID); err != nil {
+			return playerUUIDs, err
+		}
+
+		playerUUIDs = append(playerUUIDs, pUUID)
+	}
+
+	return playerUUIDs, nil
+}
+
+func GetPlayerByUUID(uuid string, ctx context.Context, client spanner.Client) (Player, error) {
+	row, err := client.Single().ReadRow(ctx, "players",
+		spanner.Key{uuid}, []string{"email"})
+	if err != nil {
+		return Player{}, err
+	}
+
+	player := Player{}
+	row.ToStruct(&player)
+	return player, nil
+}
+
 // func GetPlayerByLogin(name string, password string) (Player, error) {
-
-// }
-
-// func GetPlayerByUUID(uuid string) (Player, error) {
 
 // }
