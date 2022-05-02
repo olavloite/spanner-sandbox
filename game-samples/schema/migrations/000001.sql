@@ -5,7 +5,6 @@ CREATE TABLE players (
 	user_password STRING(61) NOT NULL,
 	created TIMESTAMP,
 	updated TIMESTAMP,
-    active_skinUUID STRING(36) NOT NULL,
 	stats JSON,
 	account_balance NUMERIC,
 	is_logged_in BOOL,

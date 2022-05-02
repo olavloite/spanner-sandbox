@@ -5,14 +5,8 @@ import string
 import json
 import random
 import requests
-import os
 
-# import google.oauth2.id_token
-# import google.auth.transport.requests
-
-# request = google.auth.transport.requests.Request()
-
-# Generate user load with 3:1 reads to write
+# Generate player load with 5:1 reads to write
 class PlayerLoad(HttpUser):
     def on_start(self):
         self.getValidUUIDs()
@@ -36,7 +30,6 @@ class PlayerLoad(HttpUser):
 
     @task
     def createPlayer(self):
-        # id_token = google.oauth2.id_token.fetch_id_token(request, target_audience)
         headers = {"Content-Type": "application/json"}
         data = {"player_name": self.generatePlayerName(), "email": self.generateEmail(), "password": self.generatePassword()}
 
@@ -44,11 +37,7 @@ class PlayerLoad(HttpUser):
 
     @task(5)
     def getPlayer(self):
-        # id_token = google.oauth2.id_token.fetch_id_token(request, target_audience)
         pUUID = pUUIDs[random.randint(0, len(pUUIDs)-1)]
         headers = {"Content-Type": "application/json"}
 
         self.client.get(f"/players/{pUUID}", headers=headers)
-
-    # @task(5)
-    # def login(self):

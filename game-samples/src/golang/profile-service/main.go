@@ -6,10 +6,11 @@ import (
 	"net/http"
 
 	spanner "cloud.google.com/go/spanner"
-	"github.com/dtest/spanner-profile-service/models"
+	"github.com/dtest/spanner-game-profile-service/models"
 	"github.com/gin-gonic/gin"
 )
 
+// Mutator to create spanner context and client, and set them in gin
 func setSpannerConnection(connectionString string) gin.HandlerFunc {
 	ctx := context.Background()
 	client, err := spanner.NewClient(ctx, connectionString)
@@ -25,6 +26,7 @@ func setSpannerConnection(connectionString string) gin.HandlerFunc {
 	}
 }
 
+// Helper function to retrieve spanner client and context
 func getSpannerConnection(c *gin.Context) (spanner.Client, context.Context) {
 	return c.MustGet("spanner_client").(spanner.Client),
 		c.MustGet("spanner_context").(context.Context)
@@ -32,10 +34,10 @@ func getSpannerConnection(c *gin.Context) (spanner.Client, context.Context) {
 
 // TODO: used by authentication server to generate load. Should not be called by other entities,
 //  so restrictions should be implemented
-func getPlayers(c *gin.Context) {
+func getPlayerUUIDs(c *gin.Context) {
 	client, ctx := getSpannerConnection(c)
 
-	players, err := models.GetPlayers(ctx, client)
+	players, err := models.GetPlayerUUIDs(ctx, client)
 	if err != nil {
 		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "No players exist"})
 		return
@@ -78,13 +80,16 @@ func createPlayer(c *gin.Context) {
 
 func main() {
 	router := gin.Default()
+	// TODO: Better configuration of trusted proxy
+	router.SetTrustedProxies(nil)
 
 	var db = "projects/development-344820/instances/cymbal-games/databases/my_game"
 	router.Use(setSpannerConnection(db))
 
-	router.GET("/players", getPlayers)
+	router.GET("/players", getPlayerUUIDs)
 	router.GET("/players/:id", getPlayerByID)
 	router.POST("/players", createPlayer)
 
+	// TODO: Better configuration of host
 	router.Run("localhost:8080")
 }

@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -13,11 +14,9 @@ import (
 	iterator "google.golang.org/api/iterator"
 )
 
-type Timestamp time.Time
-
 type PlayerStats struct {
-	time_played int
-	stat2       int
+	Games_played int `json:"games_played"`
+	Games_won    int `json:"games_won"`
 }
 
 type Player struct {
@@ -25,14 +24,14 @@ type Player struct {
 	Player_name     string `json:"player_name" binding:"required"`
 	Email           string `json:"email" binding:"required"`
 	Password        string `json:"password" binding:"required"`
-	created         Timestamp
-	updated         Timestamp
-	Active_skinUUID string      `json:"active_skinUUID"`
-	Stats           PlayerStats `json:"stats"`
-	Account_balance float64     `json:"account_balance"`
-	last_login      Timestamp
+	created         time.Time
+	updated         time.Time
+	Stats           string  `json:"stats"`
+	Account_balance float64 `json:"account_balance"`
+	last_login      time.Time
 	is_logged_in    bool
 	valid_email     bool
+	Current_game    string `json:"current_game"`
 }
 
 // TODO check for valid domains, and not allow local domains?
@@ -78,17 +77,22 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 	// Generate UUIDv4
 	p.PlayerUUID = generateUUID()
 
+	// Initialize player stats
+	pStats, err := json.Marshal(&PlayerStats{Games_played: 0, Games_won: 0})
+	p.Stats = string(pStats)
+
 	// insert into spanner
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		stmt := spanner.Statement{
-			SQL: `INSERT players (playerUUID, player_name, email, user_password, created, active_skinUUID) VALUES
-					(@playerUUID, @playerName, @email, @password, CURRENT_TIMESTAMP(), '1')
+			SQL: `INSERT players (playerUUID, player_name, email, user_password, created, stats) VALUES
+					(@playerUUID, @playerName, @email, @password, CURRENT_TIMESTAMP(), @pStats)
 			`,
 			Params: map[string]interface{}{
 				"playerUUID": p.PlayerUUID,
 				"playerName": p.Player_name,
 				"email":      p.Email,
 				"password":   p.Password,
+				"pStats":     spanner.NullJSON{Value: p.Stats, Valid: true},
 			},
 		}
 
@@ -101,15 +105,16 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 		return "", err
 	}
 
+	// Add default and achievement skins
+
 	// return player object if successful, else return nil
 	return p.PlayerUUID, nil
 }
 
 // TODO: Currently limits to 10k by default. This shouldn't be exposed to public API usage
-func GetPlayers(ctx context.Context, client spanner.Client) ([]string, error) {
+func GetPlayerUUIDs(ctx context.Context, client spanner.Client) ([]string, error) {
 
 	ro := client.ReadOnlyTransaction()
-
 	stmt := spanner.Statement{SQL: `SELECT playerUUID FROM players LIMIT 10000`}
 	iter := ro.Query(ctx, stmt)
 	defer iter.Stop()
