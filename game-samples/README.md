@@ -45,7 +45,6 @@ go run .
 - [Generate load](generators/README.md).
 
 
-
 ### Generator dependencies
 
 The generators are run by Locust.io, which is a Python framework for generating load.
