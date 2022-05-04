@@ -11,7 +11,7 @@ A terraform file is provided that creates the appropriate resources for these sa
 
 Resources that are created:
 - Spanner instance and database based on user variables in main.tfvars
-- GKE cluster to run the load generators
+- (FUTURE) GKE cluster to run the load generators
 
 To set up the infrastructure, do the following:
 
