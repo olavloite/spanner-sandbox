@@ -27,6 +27,18 @@ vi terraform.tfvars # modify variables
 terraform apply
 ```
 
+### Setup schema
+Schema is managed by [Wrench](https://github.com/cloudspannerecosystem/wrench).
+
+After installing wrench, migrate the schema by running the `schema.bash` file (replace project/instance/database information with what was used in terraform file):
+
+```
+export SPANNER_PROJECT_ID=PROJECTID
+export SPANNER_INSTANCE_ID=INSTANCEID
+export SPANNER_DATABASE_ID=DATABASEID
+./schema.bash
+```
+
 ### Player profile sample
 - Run the profile service
 
