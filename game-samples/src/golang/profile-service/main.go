@@ -60,6 +60,21 @@ func getPlayerByID(c *gin.Context) {
 	c.IndentedJSON(http.StatusOK, player)
 }
 
+func getPlayerStats(c *gin.Context) {
+	var playerUUID = c.Param("id")
+
+	client, ctx := getSpannerConnection(c)
+
+	player, err := models.GetPlayerStats(playerUUID, ctx, client)
+
+	if err != nil {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "player not found"})
+		return
+	}
+
+	c.IndentedJSON(http.StatusOK, player)
+}
+
 func createPlayer(c *gin.Context) {
 	var player models.Player
 
@@ -86,9 +101,11 @@ func main() {
 	var db = "projects/development-344820/instances/cymbal-games/databases/my_game"
 	router.Use(setSpannerConnection(db))
 
+	router.POST("/players", createPlayer)
 	router.GET("/players", getPlayerUUIDs)
 	router.GET("/players/:id", getPlayerByID)
-	router.POST("/players", createPlayer)
+	// router.GET("/player/login", getPlayerByLogin)
+	router.GET("/players/:id/stats", getPlayerStats)
 
 	// TODO: Better configuration of host
 	router.Run("localhost:8080")

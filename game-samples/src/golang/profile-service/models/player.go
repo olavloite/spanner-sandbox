@@ -2,7 +2,6 @@ package models
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -15,8 +14,8 @@ import (
 )
 
 type PlayerStats struct {
-	Games_played int `json:"games_played"`
-	Games_won    int `json:"games_won"`
+	Games_played spanner.NullInt64 `json:"games_played"`
+	Games_won    spanner.NullInt64 `json:"games_won"`
 }
 
 type Player struct {
@@ -26,8 +25,8 @@ type Player struct {
 	Password        string `json:"password" binding:"required"`
 	created         time.Time
 	updated         time.Time
-	Stats           string  `json:"stats"`
-	Account_balance float64 `json:"account_balance"`
+	Stats           spanner.NullJSON `json:"stats"`
+	Account_balance float64          `json:"account_balance"`
 	last_login      time.Time
 	is_logged_in    bool
 	valid_email     bool
@@ -78,8 +77,10 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 	p.PlayerUUID = generateUUID()
 
 	// Initialize player stats
-	pStats, err := json.Marshal(&PlayerStats{Games_played: 0, Games_won: 0})
-	p.Stats = string(pStats)
+	emptyStats := spanner.NullJSON{Value: PlayerStats{
+		Games_played: spanner.NullInt64{Int64: 0, Valid: true},
+		Games_won:    spanner.NullInt64{Int64: 0, Valid: true},
+	}, Valid: true}
 
 	// insert into spanner
 	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
@@ -92,7 +93,7 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 				"playerName": p.Player_name,
 				"email":      p.Email,
 				"password":   p.Password,
-				"pStats":     spanner.NullJSON{Value: p.Stats, Valid: true},
+				"pStats":     emptyStats,
 			},
 		}
 
@@ -104,8 +105,6 @@ func AddPlayer(p Player, ctx context.Context, client spanner.Client) (string, er
 	if err != nil {
 		return "", err
 	}
-
-	// Add default and achievement skins
 
 	// return player object if successful, else return nil
 	return p.PlayerUUID, nil
@@ -150,10 +149,37 @@ func GetPlayerByUUID(uuid string, ctx context.Context, client spanner.Client) (P
 	}
 
 	player := Player{}
-	row.ToStruct(&player)
+	err = row.ToStruct(&player)
+
+	if err != nil {
+		fmt.Println(err)
+		return Player{}, err
+	}
 	return player, nil
 }
 
+// Getting player by login information
+// Uses player name and password. Should return an error if no player was found
 // func GetPlayerByLogin(name string, password string) (Player, error) {
 
 // }
+
+// Retrieves only the playerUUID and stats
+func GetPlayerStats(uuid string, ctx context.Context, client spanner.Client) (Player, error) {
+	row, err := client.Single().ReadRow(ctx, "players",
+		spanner.Key{uuid}, []string{"playerUUID", "stats"})
+
+	if err != nil {
+		fmt.Println(err)
+		return Player{}, err
+	}
+
+	player := Player{}
+	err = row.ToStruct(&player)
+
+	if err != nil {
+		fmt.Println(err)
+		return Player{}, err
+	}
+	return player, nil
+}

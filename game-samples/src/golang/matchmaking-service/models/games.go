@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -20,11 +21,21 @@ type Game struct {
 	finished time.Time
 }
 
+type PlayerStats struct {
+	Games_played int `json:"games_played"`
+	Games_won    int `json:"games_won"`
+}
+
+type Player struct {
+	PlayerUUID string           `json:"playerUUID"`
+	Stats      spanner.NullJSON `json:"stats"`
+}
+
 func generateUUID() string {
 	return uuid.NewString()
 }
 
-// Read rows from a spanner.
+// Helper function to read rows from a spanner.
 func readRows(iter *spanner.RowIterator) ([]spanner.Row, error) {
 	var rows []spanner.Row
 	defer iter.Stop()
@@ -45,36 +56,47 @@ func readRows(iter *spanner.RowIterator) ([]spanner.Row, error) {
 	return rows, nil
 }
 
-// Get players for provided game
-func getGamePlayers(gameUUID string, ctx context.Context, client spanner.Client) ([]string, error) {
-	txn := client.ReadOnlyTransaction()
+// Get players for a game
+// We only care about the playerUUID and their stats, as this is intended to be used
+// to modify players when a game is closed
+func getGamePlayers(gameUUID string, ctx context.Context, txn *spanner.ReadWriteTransaction) ([]string, []Player, error) {
 	stmt := spanner.Statement{
-		SQL: `SELECT PlayerUUID FROM games g, UNNEST(g.Players) AS PlayerUUID WHERE gameUUID=@game`,
+		SQL: `SELECT PlayerUUID, Stats FROM players
+				INNER JOIN (
+				SELECT pUUID FROM games g, UNNEST(g.Players) AS pUUID WHERE gameUUID=@game
+				) AS gPlayers ON gPlayers.pUUID = players.PlayerUUID;`,
 		Params: map[string]interface{}{
 			"game": gameUUID,
 		},
 	}
 
 	iter := txn.Query(ctx, stmt)
+	playerRows, err := readRows(iter)
+	if err != nil {
+		return []string{}, []Player{}, err
+	}
 
 	var playerUUIDs []string
-
-	playerRows, err := readRows(iter)
-
-	if err != nil {
-		return playerUUIDs, err
-	}
-
+	var players []Player
 	for _, row := range playerRows {
-		var pUUID string
-		if err := row.Columns(&pUUID); err != nil {
-			return playerUUIDs, err
+		var p Player
+
+		if err := row.ToStruct(&p); err != nil {
+			return []string{}, []Player{}, err
+		}
+		if p.Stats.IsNull() {
+			// Initialize player stats
+			p.Stats = spanner.NullJSON{Value: PlayerStats{
+				Games_played: 0,
+				Games_won:    0,
+			}, Valid: true}
 		}
 
-		playerUUIDs = append(playerUUIDs, pUUID)
+		players = append(players, p)
+		playerUUIDs = append(playerUUIDs, p.PlayerUUID)
 	}
 
-	return playerUUIDs, nil
+	return playerUUIDs, players, nil
 }
 
 // Provided a game UUID, determine the winner
@@ -92,6 +114,47 @@ func determineWinner(playerUUIDs []string) string {
 	return winnerUUID
 }
 
+// Given a list of players and a winner's UUID, update players of a game
+// Updating players involves closing out the game (current_game = NULL) and
+// updating their game stats. Specifically, we are incrementing games_played.
+// If the player is the determined winner, then their games_won stat is incremented.
+func updateGamePlayers(players []Player, winnerUUID string, gameUUID string,
+	ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+	for _, p := range players {
+		// Modify stats
+		var pStats PlayerStats
+		json.Unmarshal([]byte(p.Stats.String()), &pStats)
+
+		pStats.Games_played = pStats.Games_played + 1
+
+		if p.PlayerUUID == winnerUUID {
+			pStats.Games_won = pStats.Games_won + 1
+		}
+		updatedStats, _ := json.Marshal(pStats)
+		p.Stats.UnmarshalJSON(updatedStats)
+
+		// Update player
+		stmt := spanner.Statement{
+			SQL: `UPDATE players SET current_game = NULL, stats=@pStats WHERE current_game=@game AND playerUUID=@player`,
+			Params: map[string]interface{}{
+				// "stats": g.Stats,
+				"game":   gameUUID,
+				"pStats": p.Stats,
+				"player": p.PlayerUUID,
+			},
+		}
+
+		// execute transaction
+		_, err := txn.Update(ctx, stmt)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Create a new game and assign players
 // Players that are not currently playing a game are eligble to be selected for the new game
 func CreateGame(g Game, ctx context.Context, client spanner.Client) (string, error) {
@@ -107,12 +170,12 @@ func CreateGame(g Game, ctx context.Context, client spanner.Client) (string, err
 		stmt := spanner.Statement{SQL: query}
 		iter := txn.Query(ctx, stmt)
 
-		var playerUUIDs []string
-
 		playerRows, err := readRows(iter)
 		if err != nil {
 			return err
 		}
+
+		var playerUUIDs []string
 
 		for _, row := range playerRows {
 			var pUUID string
@@ -161,68 +224,54 @@ func CreateGame(g Game, ctx context.Context, client spanner.Client) (string, err
 // Additionally all players' game stats are updated, and the current_game is set to null to allow
 // them to be chosen for a new game.
 func CloseGame(g Game, ctx context.Context, client spanner.Client) (string, error) {
-	// Get game players
-	playerUUIDs, err := getGamePlayers(g.GameUUID, ctx, client)
-
-	if err != nil {
-		return "", err
-	}
-
-	// Might be an issue if there are no players!
-	if len(playerUUIDs) == 0 {
-		errorMsg := fmt.Sprintf("No players found for game '%s'", g.GameUUID)
-		return "", errors.New(errorMsg)
-	}
-
-	// Get random winner
-	winnerUUID := determineWinner(playerUUIDs)
-
 	// Close game
-	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		stmt := spanner.Statement{
-			SQL: `UPDATE games SET finished=CURRENT_TIMESTAMP(), winner=@winner WHERE gameUUID=@game AND finished IS NULL`,
-			Params: map[string]interface{}{
-				"game":   g.GameUUID,
-				"winner": winnerUUID,
-			},
-		}
-		rowCount, err := txn.Update(ctx, stmt)
-
-		if err != nil {
-			return err
-		}
-
-		// If number of rows updated is not 1, then we have a problem. Don't do anything else
-		if rowCount != 1 {
-			errorMsg := fmt.Sprintf("Error closing game '%s'", g.GameUUID)
-			return errors.New(errorMsg)
-		}
-
-		// Update each player to increment stats.games_played (and stats.games_won if winner), and set current_game to null
-		// so they can be chosen for a new game
-
-		// TODO: update stats. This requires having a copy of the stats within the transaction that can be modified
-		for _, player := range playerUUIDs {
-			// Update player
-			stmt = spanner.Statement{
-				SQL: `UPDATE players SET current_game = NULL WHERE current_game=@game AND playerUUID=@player`,
-				Params: map[string]interface{}{
-					// "stats": g.Stats,
-					"game":   g.GameUUID,
-					"player": player,
-				},
-			}
-
-			// execute transaction10
-			_, err = txn.Update(ctx, stmt)
+	var winnerUUID string
+	_, err := client.ReadWriteTransaction(ctx,
+		func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+			// Get game players
+			playerUUIDs, players, err := getGamePlayers(g.GameUUID, ctx, txn)
 
 			if err != nil {
 				return err
 			}
-		}
 
-		return nil
-	})
+			// Might be an issue if there are no players!
+			if len(playerUUIDs) == 0 {
+				errorMsg := fmt.Sprintf("No players found for game '%s'", g.GameUUID)
+				return errors.New(errorMsg)
+			}
+
+			// Get random winner
+			winnerUUID = determineWinner(playerUUIDs)
+
+			stmt := spanner.Statement{
+				SQL: `UPDATE games SET finished=CURRENT_TIMESTAMP(), winner=@winner WHERE gameUUID=@game AND finished IS NULL`,
+				Params: map[string]interface{}{
+					"game":   g.GameUUID,
+					"winner": winnerUUID,
+				},
+			}
+			rowCount, gameErr := txn.Update(ctx, stmt)
+
+			if gameErr != nil {
+				return gameErr
+			}
+
+			// If number of rows updated is not 1, then we have a problem. Don't do anything else
+			if rowCount != 1 {
+				errorMsg := fmt.Sprintf("Error closing game '%s'", g.GameUUID)
+				return errors.New(errorMsg)
+			}
+
+			// Update each player to increment stats.games_played (and stats.games_won if winner),
+			// and set current_game to null so they can be chosen for a new game
+			playerErr := updateGamePlayers(players, winnerUUID, g.GameUUID, ctx, txn)
+			if playerErr != nil {
+				return playerErr
+			}
+
+			return nil
+		})
 
 	if err != nil {
 		return "", err
