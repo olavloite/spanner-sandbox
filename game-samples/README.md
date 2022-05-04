@@ -31,19 +31,20 @@ terraform apply
 - Run the profile service
 
 ```
-cd src/profile-service
+cd src/golang/profile-service
 go run .
 ```
 
-- Generate load using the generators/profile/*.py files
+- Run the match-making service
 
 ```
-cd generators/profile
-locustfile -f authentication_server.py
-
-# Point webbrowser to http://localhost:8089 to specify load.
-# Host url will be: http://localhost:8080
+cd src/golang/matchmaking-service
+go run .
 ```
+
+- [Generate load](generators/README.md).
+
+
 
 ### Generator dependencies
 
