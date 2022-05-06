@@ -1,0 +1,2 @@
+google-cloud-spanner==3.14.0
+locust==2.8.6
